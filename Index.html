@@ -1,0 +1,539 @@
+import pandas as pd
+import numpy as np
+import plotly.graph_objects as go
+import plotly.express as px
+from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score, roc_curve
+import seaborn as sns
+import matplotlib.pyplot as plt
+import os
+import joblib
+from src.data_handler import DataHandler
+from src.model_trainer import ModelTrainer
+from src.model_evaluator import ModelEvaluator
+from src.predictor import FraudPredictor
+from src.utils import load_sample_data
+
+# Page configuration
+st.set_page_config(
+    page_title="Credit Card Fraud Detection System",
+    page_icon="💳",
+    layout="wide"
+)
+
+# Initialize session state
+if 'data_loaded' not in st.session_state:
+    st.session_state.data_loaded = False
+if 'models_trained' not in st.session_state:
+    st.session_state.models_trained = False
+if 'data' not in st.session_state:
+    st.session_state.data = None
+if 'models' not in st.session_state:
+    st.session_state.models = {}
+
+def main():
+    st.title("💳 Credit Card Fraud Detection System")
+    st.markdown("### Comprehensive ML-based fraud detection with real-time prediction capabilities")
+    
+    # Sidebar navigation
+    st.sidebar.title("Navigation")
+    page = st.sidebar.selectbox(
+        "Choose a section:",
+        ["Data Upload & Exploration", "Model Training", "Model Evaluation", "Real-time Prediction"]
+    )
+    
+    if page == "Data Upload & Exploration":
+        data_exploration_page()
+    elif page == "Model Training":
+        model_training_page()
+    elif page == "Model Evaluation":
+        model_evaluation_page()
+    elif page == "Real-time Prediction":
+        prediction_page()
+
+def data_exploration_page():
+    st.header("📊 Data Upload & Exploration")
+    
+    # Data upload section
+    st.subheader("Data Upload")
+    uploaded_file = st.file_uploader(
+        "Upload credit card transaction dataset (CSV format)",
+        type=['csv'],
+        help="Expected columns: Time, V1-V28 (PCA components), Amount, Class"
+    )
+    
+    # Option to use sample data
+    if st.button("Use Sample Data for Demo"):
+        try:
+            data = load_sample_data()
+            st.session_state.data = data
+            st.session_state.data_loaded = True
+            st.success("Sample data loaded successfully!")
+        except Exception as e:
+            st.error(f"Error loading sample data: {str(e)}")
+    
+    if uploaded_file is not None:
+        try:
+            data = pd.read_csv(uploaded_file)
+            st.session_state.data = data
+            st.session_state.data_loaded = True
+            st.success("Data uploaded successfully!")
+        except Exception as e:
+            st.error(f"Error loading data: {str(e)}")
+    
+    if st.session_state.data_loaded and st.session_state.data is not None:
+        data = st.session_state.data
+        data_handler = DataHandler(data)
+        
+        # Display basic information
+        st.subheader("Dataset Overview")
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("Total Transactions", len(data))
+        with col2:
+            fraud_count = data['Class'].sum() if 'Class' in data.columns else 0
+            st.metric("Fraudulent Transactions", fraud_count)
+        with col3:
+            fraud_rate = (fraud_count / len(data)) * 100 if len(data) > 0 else 0
+            st.metric("Fraud Rate", f"{fraud_rate:.2f}%")
+        with col4:
+            st.metric("Features", len(data.columns) - 1)
+        
+        # Display sample data
+        st.subheader("Sample Data")
+        st.dataframe(data.head(10))
+        
+        # Data exploration
+        st.subheader("Data Analysis")
+        
+        # Class distribution
+        if 'Class' in data.columns:
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.write("**Class Distribution**")
+                class_counts = data['Class'].value_counts()
+                fig_pie = px.pie(
+                    values=class_counts.values,
+                    names=['Legitimate', 'Fraudulent'],
+                    title="Transaction Class Distribution"
+                )
+                st.plotly_chart(fig_pie, use_container_width=True)
+            
+            with col2:
+                st.write("**Amount Distribution by Class**")
+                if 'Amount' in data.columns:
+                    fig_box = px.box(
+                        data, 
+                        x='Class', 
+                        y='Amount',
+                        title="Transaction Amount by Class"
+                    )
+                    fig_box.update_xaxis(tickmode='array', tickvals=[0, 1], ticktext=['Legitimate', 'Fraudulent'])
+                    st.plotly_chart(fig_box, use_container_width=True)
+        
+        # Correlation analysis
+        if st.checkbox("Show Feature Correlation Analysis"):
+            st.subheader("Feature Correlation with Fraud")
+            correlations = data_handler.get_feature_correlations()
+            
+            fig_corr = px.bar(
+                x=correlations.index,
+                y=correlations.values,
+                title="Feature Correlation with Fraud Class",
+                labels={'x': 'Features', 'y': 'Correlation'}
+            )
+            st.plotly_chart(fig_corr, use_container_width=True)
+        
+        # Statistical summary
+        if st.checkbox("Show Statistical Summary"):
+            st.subheader("Statistical Summary")
+            st.dataframe(data.describe())
+
+def model_training_page():
+    st.header("🤖 Model Training")
+    
+    if not st.session_state.data_loaded:
+        st.warning("Please upload and explore data first!")
+        return
+    
+    data = st.session_state.data
+    
+    st.subheader("Training Configuration")
+    
+    # Model selection
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        models_to_train = st.multiselect(
+            "Select models to train:",
+            ["Logistic Regression", "XGBoost", "Autoencoder"],
+            default=["Logistic Regression", "XGBoost"]
+        )
+    
+    with col2:
+        handle_imbalance = st.selectbox(
+            "Class Imbalance Handling:",
+            ["SMOTE Oversampling", "Random Undersampling", "None"]
+        )
+    
+    # Training parameters
+    st.subheader("Training Parameters")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        test_size = st.slider("Test Size", 0.1, 0.5, 0.2, 0.05)
+    with col2:
+        random_state = st.number_input("Random State", value=42)
+    with col3:
+        cross_val_folds = st.slider("Cross Validation Folds", 3, 10, 5)
+    
+    # Start training
+    if st.button("Start Training", type="primary"):
+        if not models_to_train:
+            st.error("Please select at least one model to train!")
+            return
+        
+        try:
+            with st.spinner("Training models... This may take a few minutes."):
+                # Initialize trainer
+                trainer = ModelTrainer(data)
+                
+                # Prepare data
+                X_train, X_test, y_train, y_test = trainer.prepare_data(
+                    test_size=test_size,
+                    random_state=random_state,
+                    handle_imbalance=handle_imbalance
+                )
+                
+                # Train selected models
+                trained_models = {}
+                training_results = {}
+                
+                progress_bar = st.progress(0)
+                
+                for i, model_name in enumerate(models_to_train):
+                    st.info(f"Training {model_name}...")
+                    
+                    model = None
+                    results = {}
+                    
+                    if model_name == "Logistic Regression":
+                        model, results = trainer.train_logistic_regression(X_train, y_train, X_test, y_test)
+                    elif model_name == "XGBoost":
+                        model, results = trainer.train_xgboost(X_train, y_train, X_test, y_test)
+                    elif model_name == "Autoencoder":
+                        model, results = trainer.train_autoencoder(X_train, y_train, X_test, y_test)
+                    else:
+                        st.error(f"Unknown model type: {model_name}")
+                        continue
+                    
+                    if model is not None:
+                        trained_models[model_name] = model
+                        training_results[model_name] = results
+                    
+                    progress_bar.progress((i + 1) / len(models_to_train))
+                
+                # Store in session state
+                st.session_state.models = trained_models
+                st.session_state.training_results = training_results
+                st.session_state.models_trained = True
+                st.session_state.X_test = X_test
+                st.session_state.y_test = y_test
+                st.session_state.scaler = trainer.scaler  # Store the scaler for predictions
+                st.session_state.feature_names = X_train.columns.tolist()  # Store feature names
+                
+                st.success("All models trained successfully!")
+                
+                # Display training results
+                st.subheader("Training Results")
+                results_df = pd.DataFrame(training_results).T
+                st.dataframe(results_df)
+                
+        except Exception as e:
+            st.error(f"Error during training: {str(e)}")
+
+def model_evaluation_page():
+    st.header("📈 Model Evaluation")
+    
+    if not st.session_state.models_trained:
+        st.warning("Please train models first!")
+        return
+    
+    models = st.session_state.models
+    X_test = st.session_state.X_test
+    y_test = st.session_state.y_test
+    
+    # Model selection for evaluation
+    selected_model = st.selectbox("Select model for detailed evaluation:", list(models.keys()))
+    
+    if selected_model:
+        model = models[selected_model]
+        evaluator = ModelEvaluator(model, X_test, y_test)
+        
+        # Get predictions
+        if selected_model == "Autoencoder":
+            y_pred_proba = evaluator.get_anomaly_scores()
+            y_pred = (y_pred_proba > 0.5).astype(int)
+        else:
+            y_pred_proba = model.predict_proba(X_test)[:, 1]
+            y_pred = model.predict(X_test)
+        
+        # Performance metrics
+        st.subheader("Performance Metrics")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            auc_score = roc_auc_score(y_test, y_pred_proba)
+            st.metric("ROC-AUC Score", f"{auc_score:.4f}")
+        
+        with col2:
+            precision = classification_report(y_test, y_pred, output_dict=True)['1']['precision']
+            st.metric("Precision", f"{precision:.4f}")
+        
+        with col3:
+            recall = classification_report(y_test, y_pred, output_dict=True)['1']['recall']
+            st.metric("Recall", f"{recall:.4f}")
+        
+        # ROC Curve
+        st.subheader("ROC Curve")
+        fpr, tpr, _ = roc_curve(y_test, y_pred_proba)
+        
+        fig_roc = go.Figure()
+        fig_roc.add_trace(go.Scatter(
+            x=fpr, y=tpr,
+            mode='lines',
+            name=f'{selected_model} (AUC = {auc_score:.4f})',
+            line=dict(width=2)
+        ))
+        fig_roc.add_trace(go.Scatter(
+            x=[0, 1], y=[0, 1],
+            mode='lines',
+            name='Random Classifier',
+            line=dict(dash='dash', width=1)
+        ))
+        fig_roc.update_layout(
+            title='ROC Curve',
+            xaxis_title='False Positive Rate',
+            yaxis_title='True Positive Rate',
+            width=600, height=400
+        )
+        st.plotly_chart(fig_roc, use_container_width=True)
+        
+        # Confusion Matrix
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("Confusion Matrix")
+            cm = confusion_matrix(y_test, y_pred)
+            fig_cm = px.imshow(
+                cm,
+                text_auto=True,
+                aspect="auto",
+                title="Confusion Matrix",
+                labels=dict(x="Predicted", y="Actual")
+            )
+            st.plotly_chart(fig_cm, use_container_width=True)
+        
+        with col2:
+            st.subheader("Classification Report")
+            report = classification_report(y_test, y_pred, output_dict=True)
+            report_df = pd.DataFrame(report).transpose()
+            st.dataframe(report_df)
+        
+        # Model comparison
+        if len(models) > 1:
+            st.subheader("Model Comparison")
+            comparison_data = []
+            
+            for model_name, model in models.items():
+                if model_name == "Autoencoder":
+                    temp_evaluator = ModelEvaluator(model, X_test, y_test)
+                    proba = temp_evaluator.get_anomaly_scores()
+                else:
+                    proba = model.predict_proba(X_test)[:, 1]
+                
+                auc = roc_auc_score(y_test, proba)
+                comparison_data.append({
+                    'Model': model_name,
+                    'ROC-AUC': auc
+                })
+            
+            comparison_df = pd.DataFrame(comparison_data)
+            fig_comp = px.bar(
+                comparison_df,
+                x='Model',
+                y='ROC-AUC',
+                title='Model Performance Comparison'
+            )
+            st.plotly_chart(fig_comp, use_container_width=True)
+
+def prediction_page():
+    st.header("🔍 Real-time Fraud Prediction")
+    
+    if not st.session_state.models_trained:
+        st.warning("Please train models first!")
+        return
+    
+    models = st.session_state.models
+    scaler = st.session_state.get('scaler', None)  # Handle cases where scaler might not be available
+    feature_names = st.session_state.get('feature_names', None)
+    predictor = FraudPredictor(models, scaler, feature_names)
+    
+    # Prediction method selection
+    prediction_method = st.radio(
+        "Choose prediction method:",
+        ["Single Transaction", "Batch Prediction", "Sample Transactions"]
+    )
+    
+    if prediction_method == "Single Transaction":
+        st.subheader("Single Transaction Prediction")
+        
+        # Input form for transaction features
+        with st.form("transaction_form"):
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                amount = st.number_input("Transaction Amount", min_value=0.0, value=100.0)
+                time = st.number_input("Time (seconds from first transaction)", min_value=0, value=3600)
+            
+            # V1-V28 features (simplified input)
+            features = {}
+            st.write("**PCA Features (V1-V28)** - Use default values or adjust based on your data:")
+            
+            # Create input fields for V features in groups
+            for i in range(1, 29):
+                if i <= 10:
+                    col = col1
+                elif i <= 20:
+                    col = col2
+                else:
+                    col = col3
+                
+                with col:
+                    features[f'V{i}'] = st.number_input(f'V{i}', value=0.0, format="%.6f")
+            
+            predict_button = st.form_submit_button("Predict Transaction")
+            
+            if predict_button:
+                # Prepare transaction data
+                transaction_data = {
+                    'Time': time,
+                    'Amount': amount,
+                    **features
+                }
+                
+                # Make prediction
+                predictions = predictor.predict_single_transaction(transaction_data)
+                
+                # Display results
+                st.subheader("Prediction Results")
+                
+                for model_name, result in predictions.items():
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.write(f"**{model_name}**")
+                        if result['prediction'] == 1:
+                            st.error(f"🚨 FRAUD DETECTED")
+                        else:
+                            st.success(f"✅ Legitimate Transaction")
+                    
+                    with col2:
+                        st.metric(
+                            "Fraud Probability",
+                            f"{result['probability']:.4f}",
+                            delta=f"{(result['probability'] - 0.5):.4f}"
+                        )
+    
+    elif prediction_method == "Batch Prediction":
+        st.subheader("Batch Prediction")
+        
+        uploaded_file = st.file_uploader(
+            "Upload transactions for batch prediction (CSV)",
+            type=['csv']
+        )
+        
+        if uploaded_file is not None:
+            try:
+                batch_data = pd.read_csv(uploaded_file)
+                
+                if st.button("Run Batch Prediction"):
+                    with st.spinner("Processing batch predictions..."):
+                        try:
+                            predictions = predictor.predict_batch(batch_data)
+                        except Exception as e:
+                            st.error(f"Error during batch prediction: {str(e)}")
+                            return
+                    
+                    # Display results
+                    st.subheader("Batch Prediction Results")
+                    
+                    # Add predictions to dataframe
+                    for model_name, preds in predictions.items():
+                        batch_data[f'{model_name}_prediction'] = preds['predictions']
+                        batch_data[f'{model_name}_probability'] = preds['probabilities']
+                    
+                    st.dataframe(batch_data)
+                    
+                    # Summary statistics
+                    st.subheader("Prediction Summary")
+                    for model_name in predictions.keys():
+                        fraud_count = sum(predictions[model_name]['predictions'])
+                        total_count = len(predictions[model_name]['predictions'])
+                        fraud_rate = (fraud_count / total_count) * 100
+                        
+                        st.write(f"**{model_name}:** {fraud_count}/{total_count} transactions flagged as fraud ({fraud_rate:.2f}%)")
+                    
+            except Exception as e:
+                st.error(f"Error processing batch file: {str(e)}")
+    
+    elif prediction_method == "Sample Transactions":
+        st.subheader("Sample Transaction Testing")
+        
+        if st.button("Generate and Test Sample Transactions"):
+            try:
+                # Generate sample transactions for testing
+                sample_transactions = predictor.generate_sample_transactions(10)
+            except Exception as e:
+                st.error(f"Error generating sample transactions: {str(e)}")
+                return
+            
+            # Make predictions
+            all_predictions = []
+            
+            for i, transaction in enumerate(sample_transactions):
+                predictions = predictor.predict_single_transaction(transaction)
+                
+                result_row = {
+                    'Transaction_ID': f'T{i+1:03d}',
+                    'Amount': transaction['Amount'],
+                    'Time': transaction['Time']
+                }
+                
+                for model_name, pred in predictions.items():
+                    result_row[f'{model_name}_Prediction'] = 'Fraud' if pred['prediction'] == 1 else 'Legitimate'
+                    result_row[f'{model_name}_Probability'] = pred['probability']
+                
+                all_predictions.append(result_row)
+            
+            # Display results
+            results_df = pd.DataFrame(all_predictions)
+            st.dataframe(results_df)
+            
+            # Highlight suspicious transactions
+            st.subheader("High-Risk Transactions")
+            high_risk_threshold = 0.7
+            
+            for model_name in models.keys():
+                prob_col = f'{model_name}_Probability'
+                high_risk = results_df[results_df[prob_col] > high_risk_threshold]
+                
+                if not high_risk.empty:
+                    st.write(f"**{model_name} - High Risk Transactions (>{high_risk_threshold}):**")
+                    st.dataframe(high_risk[['Transaction_ID', 'Amount', f'{model_name}_Prediction', prob_col]])
+                else:
+                    st.write(f"**{model_name}:** No high-risk transactions detected")
+
+if __name__ == "__main__":
+    main()

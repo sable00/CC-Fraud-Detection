@@ -13,14 +13,12 @@ from src.model_evaluator import ModelEvaluator
 from src.predictor import FraudPredictor
 from src.utils import load_sample_data
 
-# Page configuration
 st.set_page_config(
     page_title="Credit Card Fraud Detection System",
     page_icon="💳",
     layout="wide"
 )
 
-# Initialize session state
 if 'data_loaded' not in st.session_state:
     st.session_state.data_loaded = False
 if 'models_trained' not in st.session_state:
@@ -34,7 +32,7 @@ def main():
     st.title("💳 Credit Card Fraud Detection System")
     st.markdown("### Comprehensive ML-based fraud detection with real-time prediction capabilities")
     
-    # Sidebar navigation
+   
     st.sidebar.title("Navigation")
     page = st.sidebar.selectbox(
         "Choose a section:",
@@ -53,7 +51,6 @@ def main():
 def data_exploration_page():
     st.header("📊 Data Upload & Exploration")
     
-    # Data upload section
     st.subheader("Data Upload")
     uploaded_file = st.file_uploader(
         "Upload credit card transaction dataset (CSV format)",
@@ -61,7 +58,6 @@ def data_exploration_page():
         help="Expected columns: Time, V1-V28 (PCA components), Amount, Class"
     )
     
-    # Option to use sample data
     if st.button("Use Sample Data for Demo"):
         try:
             data = load_sample_data()
@@ -84,7 +80,6 @@ def data_exploration_page():
         data = st.session_state.data
         data_handler = DataHandler(data)
         
-        # Display basic information
         st.subheader("Dataset Overview")
         col1, col2, col3, col4 = st.columns(4)
         
@@ -99,14 +94,11 @@ def data_exploration_page():
         with col4:
             st.metric("Features", len(data.columns) - 1)
         
-        # Display sample data
         st.subheader("Sample Data")
         st.dataframe(data.head(10))
         
-        # Data exploration
         st.subheader("Data Analysis")
         
-        # Class distribution
         if 'Class' in data.columns:
             col1, col2 = st.columns(2)
             
@@ -132,7 +124,6 @@ def data_exploration_page():
                     fig_box.update_xaxis(tickmode='array', tickvals=[0, 1], ticktext=['Legitimate', 'Fraudulent'])
                     st.plotly_chart(fig_box, use_container_width=True)
         
-        # Correlation analysis
         if st.checkbox("Show Feature Correlation Analysis"):
             st.subheader("Feature Correlation with Fraud")
             correlations = data_handler.get_feature_correlations()
@@ -144,8 +135,7 @@ def data_exploration_page():
                 labels={'x': 'Features', 'y': 'Correlation'}
             )
             st.plotly_chart(fig_corr, use_container_width=True)
-        
-        # Statistical summary
+ 
         if st.checkbox("Show Statistical Summary"):
             st.subheader("Statistical Summary")
             st.dataframe(data.describe())
@@ -161,7 +151,6 @@ def model_training_page():
     
     st.subheader("Training Configuration")
     
-    # Model selection
     col1, col2 = st.columns(2)
     
     with col1:
@@ -177,7 +166,6 @@ def model_training_page():
             ["SMOTE Oversampling", "Random Undersampling", "None"]
         )
     
-    # Training parameters
     st.subheader("Training Parameters")
     col1, col2, col3 = st.columns(3)
     
@@ -188,7 +176,6 @@ def model_training_page():
     with col3:
         cross_val_folds = st.slider("Cross Validation Folds", 3, 10, 5)
     
-    # Start training
     if st.button("Start Training", type="primary"):
         if not models_to_train:
             st.error("Please select at least one model to train!")
@@ -196,17 +183,14 @@ def model_training_page():
         
         try:
             with st.spinner("Training models... This may take a few minutes."):
-                # Initialize trainer
                 trainer = ModelTrainer(data)
                 
-                # Prepare data
                 X_train, X_test, y_train, y_test = trainer.prepare_data(
                     test_size=test_size,
                     random_state=random_state,
                     handle_imbalance=handle_imbalance
                 )
                 
-                # Train selected models
                 trained_models = {}
                 training_results = {}
                 
@@ -234,7 +218,6 @@ def model_training_page():
                     
                     progress_bar.progress((i + 1) / len(models_to_train))
                 
-                # Store in session state
                 st.session_state.models = trained_models
                 st.session_state.training_results = training_results
                 st.session_state.models_trained = True
@@ -245,7 +228,6 @@ def model_training_page():
                 
                 st.success("All models trained successfully!")
                 
-                # Display training results
                 st.subheader("Training Results")
                 results_df = pd.DataFrame(training_results).T
                 st.dataframe(results_df)
@@ -264,22 +246,19 @@ def model_evaluation_page():
     X_test = st.session_state.X_test
     y_test = st.session_state.y_test
     
-    # Model selection for evaluation
     selected_model = st.selectbox("Select model for detailed evaluation:", list(models.keys()))
     
     if selected_model:
         model = models[selected_model]
         evaluator = ModelEvaluator(model, X_test, y_test)
         
-        # Get predictions
         if selected_model == "Autoencoder":
             y_pred_proba = evaluator.get_anomaly_scores()
             y_pred = (y_pred_proba > 0.5).astype(int)
         else:
             y_pred_proba = model.predict_proba(X_test)[:, 1]
             y_pred = model.predict(X_test)
-        
-        # Performance metrics
+
         st.subheader("Performance Metrics")
         col1, col2, col3 = st.columns(3)
         
@@ -295,7 +274,6 @@ def model_evaluation_page():
             recall = classification_report(y_test, y_pred, output_dict=True)['1']['recall']
             st.metric("Recall", f"{recall:.4f}")
         
-        # ROC Curve
         st.subheader("ROC Curve")
         fpr, tpr, _ = roc_curve(y_test, y_pred_proba)
         
@@ -319,8 +297,7 @@ def model_evaluation_page():
             width=600, height=400
         )
         st.plotly_chart(fig_roc, use_container_width=True)
-        
-        # Confusion Matrix
+
         col1, col2 = st.columns(2)
         
         with col1:
@@ -341,7 +318,6 @@ def model_evaluation_page():
             report_df = pd.DataFrame(report).transpose()
             st.dataframe(report_df)
         
-        # Model comparison
         if len(models) > 1:
             st.subheader("Model Comparison")
             comparison_data = []
@@ -380,7 +356,6 @@ def prediction_page():
     feature_names = st.session_state.get('feature_names', None)
     predictor = FraudPredictor(models, scaler, feature_names)
     
-    # Prediction method selection
     prediction_method = st.radio(
         "Choose prediction method:",
         ["Single Transaction", "Batch Prediction", "Sample Transactions"]
@@ -389,7 +364,6 @@ def prediction_page():
     if prediction_method == "Single Transaction":
         st.subheader("Single Transaction Prediction")
         
-        # Input form for transaction features
         with st.form("transaction_form"):
             col1, col2, col3 = st.columns(3)
             
@@ -397,11 +371,9 @@ def prediction_page():
                 amount = st.number_input("Transaction Amount", min_value=0.0, value=100.0)
                 time = st.number_input("Time (seconds from first transaction)", min_value=0, value=3600)
             
-            # V1-V28 features (simplified input)
             features = {}
             st.write("**PCA Features (V1-V28)** - Use default values or adjust based on your data:")
             
-            # Create input fields for V features in groups
             for i in range(1, 29):
                 if i <= 10:
                     col = col1
@@ -416,17 +388,15 @@ def prediction_page():
             predict_button = st.form_submit_button("Predict Transaction")
             
             if predict_button:
-                # Prepare transaction data
+
                 transaction_data = {
                     'Time': time,
                     'Amount': amount,
                     **features
                 }
                 
-                # Make prediction
                 predictions = predictor.predict_single_transaction(transaction_data)
                 
-                # Display results
                 st.subheader("Prediction Results")
                 
                 for model_name, result in predictions.items():
@@ -466,17 +436,14 @@ def prediction_page():
                             st.error(f"Error during batch prediction: {str(e)}")
                             return
                     
-                    # Display results
                     st.subheader("Batch Prediction Results")
                     
-                    # Add predictions to dataframe
                     for model_name, preds in predictions.items():
                         batch_data[f'{model_name}_prediction'] = preds['predictions']
                         batch_data[f'{model_name}_probability'] = preds['probabilities']
                     
                     st.dataframe(batch_data)
                     
-                    # Summary statistics
                     st.subheader("Prediction Summary")
                     for model_name in predictions.keys():
                         fraud_count = sum(predictions[model_name]['predictions'])
@@ -493,13 +460,12 @@ def prediction_page():
         
         if st.button("Generate and Test Sample Transactions"):
             try:
-                # Generate sample transactions for testing
+   
                 sample_transactions = predictor.generate_sample_transactions(10)
             except Exception as e:
                 st.error(f"Error generating sample transactions: {str(e)}")
                 return
             
-            # Make predictions
             all_predictions = []
             
             for i, transaction in enumerate(sample_transactions):
@@ -517,11 +483,10 @@ def prediction_page():
                 
                 all_predictions.append(result_row)
             
-            # Display results
+
             results_df = pd.DataFrame(all_predictions)
             st.dataframe(results_df)
             
-            # Highlight suspicious transactions
             st.subheader("High-Risk Transactions")
             high_risk_threshold = 0.7
             
